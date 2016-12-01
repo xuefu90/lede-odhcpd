@@ -157,6 +157,7 @@ struct interface {
 	struct in_addr *dhcpv4_dns;
 	size_t dhcpv4_dns_cnt;
 	uint32_t dhcpv4_leasetime;
+	uint32_t dhcpv4_static_leasetime;
 
 	// DNS
 	struct in6_addr *dns;

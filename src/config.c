@@ -22,6 +22,7 @@ enum {
 	IFACE_ATTR_DYNAMICDHCP,
 	IFACE_ATTR_IGNORE,
 	IFACE_ATTR_LEASETIME,
+	IFACE_ATTR_STATIC_LEASETIME,
 	IFACE_ATTR_LIMIT,
 	IFACE_ATTR_START,
 	IFACE_ATTR_MASTER,
@@ -55,6 +56,7 @@ static const struct blobmsg_policy iface_attrs[IFACE_ATTR_MAX] = {
 	[IFACE_ATTR_DYNAMICDHCP] = { .name = "dynamicdhcp", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_IGNORE] = { .name = "ignore", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_LEASETIME] = { .name = "leasetime", .type = BLOBMSG_TYPE_STRING },
+	[IFACE_ATTR_STATIC_LEASETIME] = { .name = "static_leasetime", .type = BLOBMSG_TYPE_STRING },
 	[IFACE_ATTR_START] = { .name = "start", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_LIMIT] = { .name = "limit", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_MASTER] = { .name = "master", .type = BLOBMSG_TYPE_BOOL },
@@ -374,6 +376,20 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 
 		if (time >= 60)
 			iface->dhcpv4_leasetime = time;
+	}
+
+	if ((c = tb[IFACE_ATTR_STATIC_LEASETIME])) {
+		double time = parse_leasetime(c);
+		if (time < 0)
+			goto err;
+
+		if (time >= 60)
+			iface->dhcpv4_static_leasetime = time;
+	}
+
+	/* Default static leases to infinite leasetime */
+	if (!iface->dhcpv4_static_leasetime) {
+		dhcpv4_static_leasetime = UINT32_MAX;
 	}
 
 	if ((c = tb[IFACE_ATTR_START])) {

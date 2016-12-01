@@ -176,19 +176,20 @@ int setup_dhcpv4_interface(struct interface *iface, bool enable)
 					iface->ifname);
 				return -1;
 			}
+			/* Use default static leasetime if no host-specific leasetime */
 			if (lease->dhcpv4_leasetime >= 60) {
 				a->leasetime = lease->dhcpv4_leasetime;
-				/* leasetime of UINT32_MAX is infinite */
-				if (a->leasetime == UINT32_MAX) {
-					a->valid_until = 0;
-				} else {
-					/* Make sure valid_until is not marked infinite
-					 * unless that was actually the intention
-					 */
-					a->valid_until = odhcpd_time();
-				}
 			} else {
+				a->leasetime = iface->dhcpv4_static_leasetime;
+			}
+			/* leasetime of UINT32_MAX is infinite */
+			if (a->leasetime == UINT32_MAX) {
 				a->valid_until = 0;
+			} else {
+				/* Make sure valid_until is not marked infinite
+				 * unless that was actually the intention
+				 */
+				a->valid_until = odhcpd_time();
 			}
 
 			a->addr = ntohl(lease->ipaddr.s_addr);

@@ -102,18 +102,18 @@ int setup_dhcpv6_ia_interface(struct interface *iface, bool enable)
 
 			if (lease->dhcpv4_leasetime > 0) {
 				a->leasetime = lease->dhcpv4_leasetime;
-
-				/* leasetime of UINT32_MAX is infinite valid */
-				if (a->leasetime == UINT32_MAX) {
-					a->valid_until = 0;
-				} else {
-					/* Make sure valid_until is not marked infinite unless
-					 * that was actually the intention.
-					 */
-					a->valid_until = odhcpd_time();
-				}
 			} else {
+				a->leasetime = iface->dhcpv4_static_leasetime;
+			}
+
+			/* leasetime of UINT32_MAX is infinite valid */
+			if (a->leasetime == UINT32_MAX) {
 				a->valid_until = 0;
+			} else {
+				/* Make sure valid_until is not marked infinite unless
+				 * that was actually the intention.
+				 */
+				a->valid_until = odhcpd_time();
 			}
 
 			a->clid_len = duid_len;
