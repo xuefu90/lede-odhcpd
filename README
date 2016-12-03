@@ -58,7 +58,7 @@ and may also receive information from ubus
 Section of type odhcpd
 
 Option		Type	Default			Description
-legacy		bool	0			Enable DHCPv4 if start but
+maindhcp	bool	0			Enable DHCPv4 if start but
 						no dhcpv4 option set
 leasefile	string				DHCP/v6 lease/hostfile
 leasetrigger	string				Lease trigger script
@@ -113,4 +113,5 @@ mac		string				MAC-address
 duid		string				DUID in base16
 hostid		string				IPv6 host identifier
 name		string				Hostname
-
+leasetime	string				Leasetime in second or
+					        e.g. 1d for 1 day
