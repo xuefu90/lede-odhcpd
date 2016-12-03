@@ -176,14 +176,24 @@ int setup_dhcpv4_interface(struct interface *iface, bool enable)
 					iface->ifname);
 				return -1;
 			}
-			if (lease->dhcpv4_leasetime >= 60)
+			if (lease->dhcpv4_leasetime >= 60) {
 				a->leasetime = lease->dhcpv4_leasetime;
+				/* leasetime of UINT32_MAX is infinite */
+				if (a->leasetime == UINT32_MAX) {
+					a->valid_until = 0;
+				} else {
+					/* Make sure valid_until is not marked infinite
+					 * unless that was actually the intention
+					 */
+					a->valid_until = odhcpd_time();
+				}
+			} else {
+				a->valid_until = 0;
+			}
+
 			a->addr = ntohl(lease->ipaddr.s_addr);
 			memcpy(a->hwaddr, lease->mac.ether_addr_octet, sizeof(a->hwaddr));
 			memcpy(a->hostname, lease->hostname, hostlen);
-			/* Infinite valid */
-			a->valid_until = 0;
-
 			// Assign to all interfaces
 			struct dhcpv4_assignment *c;
 			list_for_each_entry(c, &iface->dhcpv4_assignments, head) {

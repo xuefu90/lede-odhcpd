@@ -100,8 +100,21 @@ int setup_dhcpv6_ia_interface(struct interface *iface, bool enable)
 				return -1;
 			}
 
-			if (lease->dhcpv4_leasetime > 0)
+			if (lease->dhcpv4_leasetime > 0) {
 				a->leasetime = lease->dhcpv4_leasetime;
+
+				/* leasetime of UINT32_MAX is infinite valid */
+				if (a->leasetime == UINT32_MAX) {
+					a->valid_until = 0;
+				} else {
+					/* Make sure valid_until is not marked infinite unless
+					 * that was actually the intention.
+					 */
+					a->valid_until = odhcpd_time();
+				}
+			} else {
+				a->valid_until = 0;
+			}
 
 			a->clid_len = duid_len;
 			a->length = 128;
@@ -114,8 +127,6 @@ int setup_dhcpv6_ia_interface(struct interface *iface, bool enable)
 			odhcpd_urandom(a->key, sizeof(a->key));
 			memcpy(a->clid_data, lease->duid, lease->duid_len);
 			memcpy(a->mac, lease->mac.ether_addr_octet, sizeof(a->mac));
-			/* Infinite valid */
-			a->valid_until = 0;
 
 			// Assign to all interfaces
 			struct dhcpv6_assignment *c;
