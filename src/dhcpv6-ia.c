@@ -19,6 +19,7 @@
 #include "libubox/md5.h"
 #include "libubox/usock.h"
 
+#include <libgen.h>
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -204,142 +205,187 @@ static int send_reconf(struct interface *iface, struct dhcpv6_assignment *assign
 	return odhcpd_send(iface->dhcpv6_event.uloop.fd, &assign->peer, &iov, 1, iface);
 }
 
+static int mkdir_p(char *dir, mode_t mask)
+{
+	char *l = strrchr(dir, '/');
+	int ret;
+
+	if (!l)
+		return 0;
+
+	*l = '\0';
+
+	if (mkdir_p(dir, mask))
+		return -1;
+
+	*l = '/';
+
+	ret = mkdir(dir, mask);
+	if (ret && errno == EEXIST)
+		return 0;
+
+	if (ret)
+		syslog(LOG_ERR, "mkdir(%s, %d) failed: %s\n", dir, mask, strerror(errno));
+
+	return ret;
+}
+
+FILE *dp dhcpv6_open_statefile(const char *statefilename) {
+	if (!statefilename)
+		return NULL
+
+	char *path = strdup(statefilename);
+
+	if (!path)
+		return NULL
+
+	mkdir_p(dirname(path), 0755);
+	free(path);
+
+	int fd = open(statefilename, O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+	if (fd < 0)
+		return NULL;
+
+	lockf(fd, F_LOCK, 0);
+	if (ftruncate(fd, 0) < 0) {}
+
+	FILE *fp = fdopen(fd, "w");
+	if (!fp) {
+		close(fd);
+		return NULL;
+	}
+	return fp;
+}
+
 void dhcpv6_write_statefile(void)
 {
 	md5_ctx_t md5;
 	md5_begin(&md5);
 
+	time_t now = odhcpd_time(), wall_time = time(NULL);
+
+	FILE *statefile = NULL;
+	FILE *mainstatefile = NULL;
+	FILE *fp;
+
 	if (config.dhcp_statefile) {
-		time_t now = odhcpd_time(), wall_time = time(NULL);
-		int fd = open(config.dhcp_statefile, O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
-		if (fd < 0)
-			return;
-
-		lockf(fd, F_LOCK, 0);
-		if (ftruncate(fd, 0) < 0) {}
-
-		FILE *fp = fdopen(fd, "w");
-		if (!fp) {
-			close(fd);
-			return;
-		}
-
-		struct interface *iface;
-		list_for_each_entry(iface, &interfaces, head) {
-			if (iface->dhcpv6 != RELAYD_SERVER && iface->dhcpv4 != RELAYD_SERVER)
-				continue;
-
-			if (iface->dhcpv6 == RELAYD_SERVER && iface->ia_assignments.next) {
-				struct dhcpv6_assignment *c;
-				list_for_each_entry(c, &iface->ia_assignments, head) {
-					if (!(c->flags & OAF_BOUND) || c->managed_size < 0)
-						continue;
-
-					char ipbuf[INET6_ADDRSTRLEN];
-					char leasebuf[512];
-					char duidbuf[264];
-					odhcpd_hexlify(duidbuf, c->clid_data, c->clid_len);
-
-					// iface DUID iaid hostname lifetime assigned length [addrs...]
-					int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s %x %s %ld %x %u ",
-							iface->ifname, duidbuf, ntohl(c->iaid),
-							(c->hostname ? c->hostname : "-"),
-							(c->valid_until > now ?
-								(c->valid_until - now + wall_time) :
-								(INFINITE_VALID(c->valid_until) ? -1 : 0)),
-							c->assigned, (unsigned)c->length);
-
-					struct in6_addr addr;
-					struct odhcpd_ipaddr *addrs = (c->managed) ? c->managed : iface->ia_addr;
-					size_t addrlen = (c->managed) ? (size_t)c->managed_size : iface->ia_addr_len;
-					size_t m = 0;
-
-					for (size_t i = 0; i < addrlen; ++i)
-						if (addrs[i].preferred > addrs[m].preferred ||
-								(addrs[i].preferred == addrs[m].preferred &&
-										memcmp(&addrs[i].addr, &addrs[m].addr, 16) > 0))
-							m = i;
-
-					for (size_t i = 0; i < addrlen; ++i) {
-						if (addrs[i].prefix > 96 || (!INFINITE_VALID(c->valid_until) && c->valid_until <= now) ||
-								(iface->managed < RELAYD_MANAGED_NO_AFLAG && i != m &&
-										addrs[i].prefix == 64))
-							continue;
-
-						addr = addrs[i].addr;
-						if (c->length == 128)
-							addr.s6_addr32[3] = htonl(c->assigned);
-						else
-							addr.s6_addr32[1] |= htonl(c->assigned);
-
-						inet_ntop(AF_INET6, &addr, ipbuf, sizeof(ipbuf) - 1);
-
-						if (c->length == 128 && c->hostname) {
-							fputs(ipbuf, fp);
-
-							char b[256];
-							if (dn_expand(iface->search, iface->search + iface->search_len,
-									iface->search, b, sizeof(b)) > 0)
-								fprintf(fp, "\t%s.%s", c->hostname, b);
-
-							fprintf(fp, "\t%s\n", c->hostname);
-							md5_hash(ipbuf, strlen(ipbuf), &md5);
-							md5_hash(c->hostname, strlen(c->hostname), &md5);
-						}
-
-						l += snprintf(leasebuf + l, sizeof(leasebuf) - l, "%s/%d ", ipbuf,
-								(c->managed_size) ? addrs[i].prefix : c->length);
-					}
-					leasebuf[l - 1] = '\n';
-					fwrite(leasebuf, 1, l, fp);
-				}
-			}
-
-			if (iface->dhcpv4 == RELAYD_SERVER && iface->dhcpv4_assignments.next) {
-				struct dhcpv4_assignment *c;
-				list_for_each_entry(c, &iface->dhcpv4_assignments, head) {
-					if (!(c->flags & OAF_BOUND))
-						continue;
-
-					char ipbuf[INET6_ADDRSTRLEN];
-					char leasebuf[512];
-					char duidbuf[16];
-					odhcpd_hexlify(duidbuf, c->hwaddr, sizeof(c->hwaddr));
-
-					// iface DUID iaid hostname lifetime assigned length [addrs...]
-					int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s ipv4 %s %ld %x 32 ",
-							iface->ifname, duidbuf,
-							(c->hostname ? c->hostname : "-"),
-							(c->valid_until > now ?
-								(c->valid_until - now + wall_time) :
-								(INFINITE_VALID(c->valid_until) ? -1 : 0)),
-							c->addr);
-
-					struct in_addr addr = {htonl(c->addr)};
-					inet_ntop(AF_INET, &addr, ipbuf, sizeof(ipbuf) - 1);
-
-					if (c->hostname) {
-						fputs(ipbuf, fp);
-
-						char b[256];
-						if (dn_expand(iface->search, iface->search + iface->search_len,
-								iface->search, b, sizeof(b)) > 0)
-							fprintf(fp, "\t%s.%s", c->hostname, b);
-
-						fprintf(fp, "\t%s\n", c->hostname);
-						md5_hash(ipbuf, strlen(ipbuf), &md5);
-						md5_hash(c->hostname, strlen(c->hostname), &md5);
-					}
-
-					l += snprintf(leasebuf + l, sizeof(leasebuf) - l, "%s/32 ", ipbuf);
-					leasebuf[l - 1] = '\n';
-					fwrite(leasebuf, 1, l, fp);
-				}
-			}
-		}
-
-		fclose(fp);
+		mainstatefile = dhcpv6_open_statefile(config.dhcp_statefile);
 	}
+
+	struct interface *iface;
+	list_for_each_entry(iface, &interfaces, head) {
+		if (iface->dhcpv6 != RELAYD_SERVER && iface->dhcpv4 != RELAYD_SERVER)
+			continue;
+		if (iface->leasefile) {
+			statefile = dhcpv6_open_statefile(iface->leasefile);
+		}
+		if (statefile && (statefile != mainstatefile)) {
+			fp = statefile;
+		} else {
+			fp = mainstatefile;
+		}
+		if (!fp)
+			continue;
+
+		if (iface->dhcpv6 == RELAYD_SERVER && iface->ia_assignments.next) {
+			struct dhcpv6_assignment *c;
+			list_for_each_entry(c, &iface->ia_assignments, head) {
+				if (!(c->flags & OAF_BOUND) || c->managed_size < 0)
+					continue;
+
+				char ipbuf[INET6_ADDRSTRLEN];
+				char leasebuf[512];
+				char duidbuf[264];
+				odhcpd_hexlify(duidbuf, c->clid_data, c->clid_len);
+
+				// iface DUID iaid hostname lifetime assigned length [addrs...]
+				int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s %x %s %ld %x %u ",
+						iface->ifname, duidbuf, ntohl(c->iaid),
+						(c->hostname ? c->hostname : "-"),
+						(c->valid_until > now ?
+							(c->valid_until - now + wall_time) :
+							(INFINITE_VALID(c->valid_until) ? -1 : 0)),
+						c->assigned, (unsigned)c->length);
+
+				struct in6_addr addr;
+				struct odhcpd_ipaddr *addrs = (c->managed) ? c->managed : iface->ia_addr;
+				size_t addrlen = (c->managed) ? (size_t)c->managed_size : iface->ia_addr_len;
+				size_t m = 0;
+
+				for (size_t i = 0; i < addrlen; ++i)
+					if (addrs[i].preferred > addrs[m].preferred ||
+							(addrs[i].preferred == addrs[m].preferred &&
+									memcmp(&addrs[i].addr, &addrs[m].addr, 16) > 0))
+						m = i;
+
+				for (size_t i = 0; i < addrlen; ++i) {
+					if (addrs[i].prefix > 96 || (!INFINITE_VALID(c->valid_until) && c->valid_until <= now) ||
+							(iface->managed < RELAYD_MANAGED_NO_AFLAG && i != m &&
+									addrs[i].prefix == 64))
+						continue;
+
+					addr = addrs[i].addr;
+					if (c->length == 128)
+						addr.s6_addr32[3] = htonl(c->assigned);
+					else
+						addr.s6_addr32[1] |= htonl(c->assigned);
+
+					inet_ntop(AF_INET6, &addr, ipbuf, sizeof(ipbuf) - 1);
+			}
+		}
+
+		if (iface->dhcpv4 == RELAYD_SERVER && iface->dhcpv4_assignments.next) {
+			struct dhcpv4_assignment *c;
+			list_for_each_entry(c, &iface->dhcpv4_assignments, head) {
+				if (!(c->flags & OAF_BOUND))
+					continue;
+
+				char ipbuf[INET6_ADDRSTRLEN];
+				char leasebuf[512];
+				char duidbuf[16];
+				odhcpd_hexlify(duidbuf, c->hwaddr, sizeof(c->hwaddr));
+
+				// iface DUID iaid hostname lifetime assigned length [addrs...]
+				int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s ipv4 %s %ld %x 32 ",
+						iface->ifname, duidbuf,
+						(c->hostname ? c->hostname : "-"),
+						(c->valid_until > now ?
+							(c->valid_until - now + wall_time) :
+							(INFINITE_VALID(c->valid_until) ? -1 : 0)),
+						c->addr);
+
+			struct in_addr addr = {htonl(c->addr)};
+				inet_ntop(AF_INET, &addr, ipbuf, sizeof(ipbuf) - 1);
+
+				if (c->hostname) {
+					fputs(ipbuf, fp);
+
+					char b[256];
+					if (dn_expand(iface->search, iface->search + iface->search_len,
+							iface->search, b, sizeof(b)) > 0)
+						fprintf(fp, "\t%s.%s", c->hostname, b);
+
+					fprintf(fp, "\t%s\n", c->hostname);
+					md5_hash(ipbuf, strlen(ipbuf), &md5);
+					md5_hash(c->hostname, strlen(c->hostname), &md5);
+				}
+
+				l += snprintf(leasebuf + l, sizeof(leasebuf) - l, "%s/%d ", ipbuf,
+						(c->managed_size) ? addrs[i].prefix : c->length);
+			}
+			leasebuf[l - 1] = '\n';
+			fwrite(leasebuf, 1, l, fp);
+		}
+
+		if (fp != mainstatefile) {
+			fclose(statefile);
+			fp = NULL;
+			statefile = NULL;
+		}
+	}
+
+	if (mainstatefile)
+		fclose(mainstatefile);
 
 	uint8_t newmd5[16];
 	md5_end(newmd5, &md5);

@@ -3,7 +3,6 @@
 #include <signal.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <libgen.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -48,6 +47,7 @@ enum {
 	IFACE_ATTR_PD_CER,
 	IFACE_ATTR_NDPROXY_ROUTING,
 	IFACE_ATTR_NDPROXY_SLAVE,
+	IFACE_ATTR_LEASEFILE,
 	IFACE_ATTR_MAX
 };
 
@@ -81,6 +81,7 @@ static const struct blobmsg_policy iface_attrs[IFACE_ATTR_MAX] = {
 	[IFACE_ATTR_RA_MAXINTERVAL] = { .name = "ra_maxinterval", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_NDPROXY_ROUTING] = { .name = "ndproxy_routing", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_NDPROXY_SLAVE] = { .name = "ndproxy_slave", .type = BLOBMSG_TYPE_BOOL },
+	[IFACE_ATTR_LEASEFILE] = { .name = "leasefile", .type = BLOBMSG_TYPE_STRING },
 };
 
 static const struct uci_blob_param_info iface_attr_info[IFACE_ATTR_MAX] = {
@@ -137,31 +138,6 @@ const struct uci_blob_param_list odhcpd_attr_list = {
 	.params = odhcpd_attrs,
 };
 
-static int mkdir_p(char *dir, mode_t mask)
-{
-	char *l = strrchr(dir, '/');
-	int ret;
-
-	if (!l)
-		return 0;
-
-	*l = '\0';
-
-	if (mkdir_p(dir, mask))
-		return -1;
-
-	*l = '/';
-
-	ret = mkdir(dir, mask);
-	if (ret && errno == EEXIST)
-		return 0;
-
-	if (ret)
-		syslog(LOG_ERR, "mkdir(%s, %d) failed: %s\n", dir, mask, strerror(errno));
-
-	return ret;
-}
-
 static void free_lease(struct lease *l)
 {
 	if (l->head.next)
@@ -189,6 +165,7 @@ static void clean_interface(struct interface *iface)
 	free(iface->dhcpv4_dns);
 	free(iface->dhcpv6_raw);
 	free(iface->filter_class);
+	free(iface->leasefile);
 	memset(&iface->ra, 0, sizeof(*iface) - offsetof(struct interface, ra));
 }
 
@@ -596,6 +573,11 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 	if ((c = tb[IFACE_ATTR_NDPROXY_SLAVE]))
 		iface->external = blobmsg_get_bool(c);
 
+	if ((c = tb[IFACE_ATTR_LEASEFILE])) {
+		free(iface->leasefile);
+		iface->leasefilename = strdup(blobmsg_get_string(c));
+	}
+
 	return 0;
 
 err:
@@ -642,13 +624,6 @@ void odhcpd_reload(void)
 			if (!strcmp(s->type, "dhcp"))
 				set_interface(s);
 		}
-	}
-
-	if (config.dhcp_statefile) {
-		char *path = strdup(config.dhcp_statefile);
-
-		mkdir_p(dirname(path), 0755);
-		free(path);
 	}
 
 #ifdef WITH_UBUS
