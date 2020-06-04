@@ -58,7 +58,7 @@ and may also receive information from ubus
 Section of type odhcpd
 
 Option		Type	Default			Description
-legacy		bool	0			Enable DHCPv4 if start but
+maindhcp	bool	0			Enable DHCPv4 if start but
 						no dhcpv4 option set
 leasefile	string				DHCP/v6 lease/hostfile
 leasetrigger	string				Lease trigger script
@@ -94,6 +94,7 @@ domain		list	<local search domain>	Search domains to announce
 leasetime	string	12h			DHCPv4 address leasetime
 start		integer	100			DHCPv4 pool start
 limit		integer	150			DHCPv4 pool size
+leasefile	string				Per-interface lease/hostfile
 
 ra_default	integer	0			Override default route
 		0: default, 1: ignore no public address, 2: ignore all
@@ -113,4 +114,5 @@ mac		string				MAC-address
 duid		string				DUID in base16
 hostid		string				IPv6 host identifier
 name		string				Hostname
-
+leasetime	string				Leasetime in second or
+					        e.g. 1d for 1 day
